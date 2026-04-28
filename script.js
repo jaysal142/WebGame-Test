@@ -5,28 +5,40 @@ window.addEventListener('load', function() {
     canvas.height = 720;
     let enemies = [];
     let score = 0;
+    let highScore = 0;
     let gameOver = false;
     let gameStart = false;
 
-    let scale = 0.5;
+    let scale = 0.75;
 
     class InputHandler {
         constructor() {
             this.keys = [];
+            this.clicked = false;
+            this.spaceHeld = false;
+            this.spaceFired = false;
             window.addEventListener('keydown', e => {
-                if ((   e.key === 'ArrowDown' || 
-                        e.key === 'ArrowUp' ||
-                        e.key === ' ') 
+                if ((   e.key === 'ArrowDown' ||
+                        e.key === 'ArrowUp')
                         && this.keys.indexOf(e.key) === -1) {
                     this.keys.push(e.key);
                 }
+                if (e.key === ' ' && !this.spaceHeld) {
+                    this.spaceHeld = true;
+                }
             });
             window.addEventListener('keyup', e => {
-                if (    e.key === 'ArrowDown' || 
-                        e.key === 'ArrowUp' ||
-                        e.key === ' ') {
+                if (    e.key === 'ArrowDown' ||
+                        e.key === 'ArrowUp') {
                     this.keys.splice(this.keys.indexOf(e.key), 1);
                 }
+                if (e.key === ' ') {
+                    this.spaceHeld = false;
+                    this.spaceFired = true;
+                }
+            });
+            window.addEventListener('mousedown', e => {
+                if (e.button === 0) this.clicked = true;
             });
         }
     }
@@ -62,6 +74,8 @@ window.addEventListener('load', function() {
             this.cannonH = cannonH;
             this.angle = 0;
             this.active = true;
+            this.charge = 0;
+            this.chargeDir = 1;
         }
         draw(context) {
             if (!this.active) return;
@@ -70,6 +84,24 @@ window.addEventListener('load', function() {
             context.rotate(this.angle * Math.PI / 180);
             context.drawImage(this.image, 0, -this.height/2, this.width, this.height);
             context.restore();
+            this.drawMeter(context);
+        }
+        drawMeter(context) {
+            if (gameStart || !this.charge) return;
+            const meterX = this.x - 68;
+            const meterY = this.y - 40;
+            const meterW = 120;
+            const meterH = 14;
+            const ratio = this.charge / 100;
+            const r = Math.floor(255 * Math.min(ratio * 2, 1));
+            const g = Math.floor(255 * Math.min((1 - ratio) * 2, 1));
+            context.fillStyle = 'rgba(0,0,0,0.4)';
+            context.fillRect(meterX, meterY, meterW, meterH);
+            context.fillStyle = `rgb(${r},${g},0)`;
+            context.fillRect(meterX, meterY, meterW * ratio, meterH);
+            context.strokeStyle = 'white';
+            context.lineWidth = 1;
+            context.strokeRect(meterX, meterY, meterW, meterH);
         }
         update(input) {
             if (gameStart) {
@@ -80,18 +112,28 @@ window.addEventListener('load', function() {
                 }
                 return;
             }
-
-            //input
+            // input
             if (input.keys.indexOf('ArrowUp') > -1) {
                 this.angle -= 2;
             } else if (input.keys.indexOf('ArrowDown') > -1) {
                 this.angle += 2;
-            } else if (input.keys.indexOf(' ') > -1) {
+            }
+            if (input.spaceHeld) {
+                this.charge += this.chargeDir * 5;
+                if (this.charge >= 100 || this.charge <= 0) {
+                    this.chargeDir *= -1;
+                    this.charge = Math.max(0, Math.min(100, this.charge));
+                }
+            }
+            if (input.spaceFired) {
+                input.spaceFired = false;
                 gameStart = true;
                 const exit = this.getExit();
                 player.x = exit.x - player.width/2;
                 player.y = exit.y - player.height/2;
+                player.power = 20 + this.charge * 0.6;
                 player.launch(this.angle);
+                this.charge = 0;
             }
             this.angle = Math.max(-60, Math.min(0, this.angle));
         }
@@ -109,26 +151,35 @@ window.addEventListener('load', function() {
         constructor(gameWidth, gameHeight) {
             this.gameWidth = gameWidth;
             this.gameHeight = gameHeight;
-            this.width = 100;
-            this.height = 105;
+            this.width = 200;
+            this.height = 200;
             this.x = 10;
             this.y = this.gameHeight - this.height;
             this.image = document.getElementById('playerImage');
-            this.frameX = 0;
-            this.maxFrame = 8;
+            this.frame = 0;
+            this.minAirFrame = 0;
+            this.maxAirFrame = 11;
+            this.minGroundFrame = 12;
+            this.maxGroundFrame = 21;
+            this.cols = 8;
             this.fps = 20;
             this.frameTimer = 0;
             this.frameInterval = 1000/this.fps;
-            this.frameY = 0;
-            this.speed = 0; 
+            this.speed = 0;
             this.vy = 0;
             this.weight = 1;
             this.power = 60;
         }
         draw(context) {
-            context.drawImage(this.image, this.frameX * this.width, this.frameY * this.height, this.width, this.height, this.x, this.y, this.width, this.height);
+            const frameX = this.frame % this.cols;
+            const frameY = Math.floor(this.frame / this.cols);
+            context.drawImage(this.image, frameX * this.width, frameY * this.height, this.width, this.height, this.x, this.y, this.width, this.height);
         }
         update(deltaTime, enemies) {
+            if (this.launched && input.clicked) {
+                this.vy = -15;
+                input.clicked = false;
+            }
             // collision detection
             enemies.forEach(enemy => {
                 const dx = (enemy.x + enemy.width/2) - (this.x + this.width/2);
@@ -140,34 +191,37 @@ window.addEventListener('load', function() {
             })
             // sprite animation
             if (this.frameTimer >= this.frameInterval) {
-                if (this.frameX >= this.maxFrame) this.frameX = 0;
-                else this.frameX++;
+                this.frame++;
+                if (this.onGround()) {
+                    if (this.frame > this.maxGroundFrame || this.frame < this.minGroundFrame) this.frame = this.minGroundFrame;
+                } else {
+                    if (this.frame > this.maxAirFrame || this.frame >= this.minGroundFrame) this.frame = this.minAirFrame;
+                }
                 this.frameTimer = 0;
             } else {
                 this.frameTimer += deltaTime;
             }
-
             // horizontal movement
-            if (this.launched) this.speed *= 0.99;
-
+            if (this.launched) {
+                this.speed *= 0.99;
+                this.distance = (this.distance || 0) + this.speed;
+            }
             // vertical movement
             this.y += this.vy;
             if (!this.onGround()) {
                 this.vy += this.weight;
-                this.maxFrame = 5;
-                //this.frameY = 1;
-            } else {
-                this.vy = 0;
-                this.maxFrame = 8;
-                this.frameY = 0;
             }
-            if (this.y > this.gameHeight - this.height) this.y = this.gameHeight - this.height;
+            if (this.y > this.gameHeight - this.height) {
+                this.y = this.gameHeight - this.height;
+                this.vy = -(this.vy * 0.5);
+                if (Math.abs(this.vy) < 2) this.vy = 0;
+            }
         }
         onGround() {
             return this.y >= this.gameHeight - this.height;
         }
         launch(angle) {
-            const radians = angle * Math.PI /180;
+            const radians = angle * Math.PI / 180;
             this.speed = Math.cos(radians) * this.power;
             this.vy = Math.sin(radians) * this.power;
             this.launched = true;
@@ -216,15 +270,17 @@ window.addEventListener('load', function() {
             context.drawImage(this.image, this.frameX * this.width, 0, this.width, this.height, this.x, this.y, this.width, this.height);
         }
         update(deltaTime, worldSpeed) {
-            if (this.frameTimer > this.frameInterval) {
+            // sprite animation
+            /*if (this.frameTimer > this.frameInterval) {
                 if (this.frameX >= this.maxFrame) this.frameX = 0;
                 else this.frameX++;
                 this.frameTimer = 0;
             } else {
                 this.frameTimer += deltaTime;
-            }
+            }*/
+           // horizontal movement
             this.x -= this.speed + Math.max(0, worldSpeed);
-            if (this.x < 0 - this.width)  {
+            if (this.x < 0 - this.width) {
                 this.markedForDeletion = true;
                 score++;
             }
@@ -234,7 +290,7 @@ window.addEventListener('load', function() {
     function handleEnemies(deltaTime) {
         if (enemyTimer > enemyInterval + randomEnemyInterval) {
             enemies.push(new Enemy(canvas.width, canvas.height));
-            randomEnemyInterval = Math.random() * 1000 + 500;        
+            randomEnemyInterval = Math.random() * 1000 + 500;
             enemyTimer = 0;
         } else {
             enemyTimer += deltaTime;
@@ -247,17 +303,29 @@ window.addEventListener('load', function() {
     }
 
     function displayStatusText(context) {
-        context.font = '40px PixelOperator';
-        context.fillStyle = 'black';
-        context.fillText('Score: ' + score, 20, 50);
-        context.fillStyle = 'white';
-        context.fillText('Score: ' + score, 22, 52);
-        if (gameOver) {
+        score += Math.floor(player.distance / 100) || 0 ;
+        if (!gameOver) {
+            context.font = '40px PixelOperator';
+            context.fillStyle = 'black';
+            context.fillText('Score: ' + score, 20, 50);
+            context.fillStyle = 'white';
+            context.fillText('Score: ' + score, 22, 52);
+            const dist = Math.floor(player.distance / 100) || 0;
+        }
+        else {
             context.textAlign = 'center';
             context.fillStyle = 'black';
-            context.fillText('GAME OVER! Try Again', canvas.width/2, 200);
+            context.fillText('GAME OVER!', canvas.width/2, 200);
             context.fillStyle = 'white';
-            context.fillText('GAME OVER! Try Again', canvas.width/2 + 2, 202);
+            context.fillText('GAME OVER!', canvas.width/2 + 2, 202);
+            context.fillStyle = 'black';
+            context.fillText('SCORE: ' + score, canvas.width/2, 300);
+            context.fillStyle = 'white';
+            context.fillText('SCORE: ' + score, canvas.width/2 + 2, 302);
+            context.fillStyle = 'black';
+            context.fillText('HIGH SCORE: ' + highScore, canvas.width/2, 400);
+            context.fillStyle = 'white';
+            context.fillText('HIGH SCORE: ' + highScore, canvas.width/2 + 2, 402);
         }
     }
 
@@ -290,6 +358,12 @@ window.addEventListener('load', function() {
         if (cannon && !cannon.active) cannon = null;
         setTimeout(() => {
             if (!gameOver) requestAnimationFrame(animate);
+            else {
+                background.draw(ctx);
+                player.frame = 18;
+                player.draw(ctx);
+                displayStatusText(ctx);
+            }
         }, 1000 / 60);
     }
     animate(0);

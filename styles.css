@@ -1,3 +1,8 @@
+@font-face {
+    font-family: 'PixelOperator';
+    src: url('fonts/PixelOperator8.ttf') format('truetype');
+}
+
 body {
     background: black;
 }
